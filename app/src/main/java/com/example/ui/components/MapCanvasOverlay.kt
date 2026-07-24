@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.ColorRamp
 import com.example.data.model.HuntingWaypoint
 import com.example.data.model.LazPoint
+import com.example.data.service.MapTileProvider
 import com.example.ml.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.AlignmentState
@@ -59,6 +60,9 @@ fun MapCanvasOverlay(
 
     var totalPanX by remember { mutableStateOf(0f) }
     var totalPanY by remember { mutableStateOf(0f) }
+
+    // Read tileVersion at composable level to cleanly recompose when new tiles arrive
+    val currentTileVersion = MapTileProvider.tileVersion.value
 
     Box(
         modifier = modifier
@@ -273,31 +277,36 @@ fun MapCanvasOverlay(
                     val py = center.y - (plume.originY * pixelsPerMeter)
                     val reachPx = plume.reachMeters * pixelsPerMeter
 
-                    drawArc(
-                        color = Color.Red.copy(alpha = 0.22f),
-                        startAngle = plume.windDirectionDegrees - (plume.coneAngleDegrees / 2f),
-                        sweepAngle = plume.coneAngleDegrees,
-                        useCenter = true,
-                        topLeft = Offset(px - reachPx, py - reachPx),
-                        size = Size(reachPx * 2, reachPx * 2)
-                    )
+                    if (reachPx > 0f && !reachPx.isNaN()) {
+                        drawArc(
+                            color = Color.Red.copy(alpha = 0.22f),
+                            startAngle = plume.windDirectionDegrees - (plume.coneAngleDegrees / 2f),
+                            sweepAngle = plume.coneAngleDegrees,
+                            useCenter = true,
+                            topLeft = Offset(px - reachPx, py - reachPx),
+                            size = Size(reachPx * 2, reachPx * 2)
+                        )
+                    }
                 }
             }
 
             // 2e. Draw Topographic Feature Badges
-            if (showFeatureHeatmap && topographicGrid != null) {
+            if (showFeatureHeatmap && !topographicGrid.isNullOrEmpty() && topographicGrid[0].isNotEmpty()) {
                 val grid = topographicGrid!!
                 for (y in grid.indices step 4) {
-                    for (x in grid[0].indices step 4) {
-                        val cell = grid[y][x]
+                    val row = grid[y]
+                    for (x in row.indices step 4) {
+                        val cell = row[x]
                         if (cell.featureType == TerrainFeatureType.SADDLE || cell.featureType == TerrainFeatureType.BENCH) {
                             val cx = center.x + (cell.worldX * pixelsPerMeter)
                             val cy = center.y - (cell.worldY * pixelsPerMeter)
-                            drawCircle(
-                                color = Color(cell.featureType.colorHex).copy(alpha = 0.8f),
-                                radius = 6.dp.toPx(),
-                                center = Offset(cx, cy)
-                            )
+                            if (!cx.isNaN() && !cy.isNaN() && cx.isFinite() && cy.isFinite()) {
+                                drawCircle(
+                                    color = Color(cell.featureType.colorHex).copy(alpha = 0.8f),
+                                    radius = 6.dp.toPx(),
+                                    center = Offset(cx, cy)
+                                )
+                            }
                         }
                     }
                 }
@@ -392,57 +401,64 @@ private fun DrawScope.drawMapBaseLayer(
     zoom: Float,
     textMeasurer: androidx.compose.ui.text.TextMeasurer
 ) {
-    when (mapType) {
-        MapType.SATELLITE -> {
-            drawRect(color = Color(0xFF1B231B))
-            // Draw grid satellite lines
-            val step = 80f
-            var x = (center.x % step)
-            while (x < canvasWidth) {
-                drawLine(
-                    color = Color.White.copy(alpha = 0.08f),
-                    start = Offset(x, 0f),
-                    end = Offset(x, canvasHeight),
-                    strokeWidth = 1f
-                )
-                x += step
-            }
-            var y = (center.y % step)
-            while (y < canvasHeight) {
-                drawLine(
-                    color = Color.White.copy(alpha = 0.08f),
-                    start = Offset(0f, y),
-                    end = Offset(canvasWidth, y),
-                    strokeWidth = 1f
-                )
-                y += step
-            }
-        }
-        MapType.HYBRID -> {
-            drawRect(color = Color(0xFF131A13))
-            // Topo contours
-            for (i in 1..8) {
-                val r = i * 110f
-                drawCircle(
-                    color = ContourGold.copy(alpha = 0.15f),
-                    radius = r,
-                    center = center,
-                    style = Stroke(width = 1.5f)
-                )
+    // Background fill
+    drawRect(color = Color(0xFF131A13))
+
+    val tileZoom = zoom.toInt().coerceIn(1, 18)
+    val tileSizePx = 256f
+
+    val centerTileX = MapTileProvider.latLngToTileX(lat, lng, tileZoom)
+    val centerTileY = MapTileProvider.latLngToTileY(lat, lng, tileZoom)
+
+    val tilesXCount = (ceil(canvasWidth / tileSizePx).toInt() + 2).coerceIn(1, 12)
+    val tilesYCount = (ceil(canvasHeight / tileSizePx).toInt() + 2).coerceIn(1, 12)
+
+    val startTileX = floor(centerTileX - (canvasWidth / (2f * tileSizePx))).toInt() - 1
+    val startTileY = floor(centerTileY - (canvasHeight / (2f * tileSizePx))).toInt() - 1
+
+    var tilesDrawn = 0
+    for (tx in startTileX until (startTileX + tilesXCount)) {
+        for (ty in startTileY until (startTileY + tilesYCount)) {
+            val tileBitmap = MapTileProvider.getTile(tileZoom, tx, ty, mapType)
+            val tileScreenX = center.x + ((tx - centerTileX) * tileSizePx).toFloat()
+            val tileScreenY = center.y + ((ty - centerTileY) * tileSizePx).toFloat()
+
+            if (tileBitmap != null && !tileBitmap.isRecycled) {
+                try {
+                    drawImage(
+                        image = tileBitmap.asImageBitmap(),
+                        topLeft = Offset(tileScreenX, tileScreenY)
+                    )
+                    tilesDrawn++
+                } catch (e: Exception) {
+                    // Ignore bitmap draw race condition
+                }
             }
         }
-        MapType.TERRAIN -> {
-            drawRect(color = Color(0xFF1E281E))
-            val step = 100f
-            var x = (center.x % step)
-            while (x < canvasWidth) {
-                drawLine(color = ContourGold.copy(alpha = 0.2f), start = Offset(x, 0f), end = Offset(x, canvasHeight))
-                x += step
-            }
+    }
+
+    if (tilesDrawn == 0) {
+        // Fallback grid lines while tiles load
+        val step = 80f
+        var x = (center.x % step)
+        while (x < canvasWidth) {
+            drawLine(
+                color = Color.White.copy(alpha = 0.08f),
+                start = Offset(x, 0f),
+                end = Offset(x, canvasHeight),
+                strokeWidth = 1f
+            )
+            x += step
         }
-        MapType.DARK_VECTOR -> {
-            drawRect(color = Color(0xFF0F140F))
-            drawCircle(color = TopoCyan.copy(alpha = 0.05f), radius = 300f, center = center)
+        var y = (center.y % step)
+        while (y < canvasHeight) {
+            drawLine(
+                color = Color.White.copy(alpha = 0.08f),
+                start = Offset(0f, y),
+                end = Offset(canvasWidth, y),
+                strokeWidth = 1f
+            )
+            y += step
         }
     }
 
