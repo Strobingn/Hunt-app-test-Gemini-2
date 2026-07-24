@@ -1,0 +1,6 @@
+{
+  "name": "Hunt Map & LAZ Overlay Align",
+  "description": "Hunting map with Google Maps integration and LAZ LiDAR overlay position alignment tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
