@@ -33,10 +33,21 @@ fun MainMapScreen(
     val isAnalyzingAi by viewModel.isAnalyzingAi.collectAsStateWithLifecycle()
     val aiAnalysisResult by viewModel.aiAnalysisResult.collectAsStateWithLifecycle()
 
+    // ML State flows
+    val showCorridors by viewModel.showCorridors.collectAsStateWithLifecycle()
+    val showThermals by viewModel.showThermals.collectAsStateWithLifecycle()
+    val showFeatureHeatmap by viewModel.showFeatureHeatmap.collectAsStateWithLifecycle()
+    val timeOfDay by viewModel.timeOfDay.collectAsStateWithLifecycle()
+    val corridors by viewModel.corridors.collectAsStateWithLifecycle()
+    val thermalVectors by viewModel.thermalVectors.collectAsStateWithLifecycle()
+    val scentPlumes by viewModel.scentPlumes.collectAsStateWithLifecycle()
+    val topographicGrid by viewModel.topographicGrid.collectAsStateWithLifecycle()
+
     var showDatasetPickerDialog by remember { mutableStateOf(false) }
     var showSavePresetDialog by remember { mutableStateOf(false) }
     var showAddWaypointDialog by remember { mutableStateOf(false) }
     var showAiDialog by remember { mutableStateOf(false) }
+    var showTrailCamDialog by remember { mutableStateOf(false) }
     var wayPointTargetLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var showMapTypeMenu by remember { mutableStateOf(false) }
 
@@ -130,6 +141,13 @@ fun MainMapScreen(
                 alignmentState = alignmentState,
                 waypoints = waypoints,
                 isCrosshairActive = isCrosshairActive,
+                corridors = corridors,
+                thermalVectors = thermalVectors,
+                scentPlumes = scentPlumes,
+                topographicGrid = topographicGrid,
+                showCorridors = showCorridors,
+                showThermals = showThermals,
+                showFeatureHeatmap = showFeatureHeatmap,
                 onMapPan = { dx, dy -> viewModel.panMapBy(dx, dy) },
                 onNudgeOverlay = { n, e -> viewModel.nudgeOverlay(n, e) },
                 onRotateOverlay = { deg -> viewModel.updateRotation(deg) },
@@ -140,6 +158,22 @@ fun MainMapScreen(
                     viewModel.setCenterLng(lng)
                     viewModel.setCrosshairPickerActive(false)
                 }
+            )
+
+            // ML Control Panel Bar Overlay at Top
+            MlControlPanelBar(
+                showCorridors = showCorridors,
+                showThermals = showThermals,
+                showFeatureHeatmap = showFeatureHeatmap,
+                timeOfDay = timeOfDay,
+                onToggleCorridors = { viewModel.toggleCorridors() },
+                onToggleThermals = { viewModel.toggleThermals() },
+                onToggleFeatureHeatmap = { viewModel.toggleFeatureHeatmap() },
+                onTimeOfDayChange = { tod -> viewModel.setTimeOfDay(tod) },
+                onOpenTrailCamAi = { showTrailCamDialog = true },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 8.dp)
             )
 
             // Bottom Alignment Control Panel
@@ -213,6 +247,12 @@ fun MainMapScreen(
             onUpdateBackendUrl = { url -> viewModel.setOracleBackendUrl(url) },
             onRunAnalysis = { prompt -> viewModel.runAiTerrainAnalysis(prompt) },
             onDismiss = { showAiDialog = false }
+        )
+    }
+
+    if (showTrailCamDialog) {
+        AiTrailCamDialog(
+            onDismiss = { showTrailCamDialog = false }
         )
     }
 }

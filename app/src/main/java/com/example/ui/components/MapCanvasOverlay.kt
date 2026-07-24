@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.ColorRamp
 import com.example.data.model.HuntingWaypoint
 import com.example.data.model.LazPoint
+import com.example.ml.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.AlignmentState
 import com.example.ui.viewmodel.MapState
@@ -39,6 +40,13 @@ fun MapCanvasOverlay(
     alignmentState: AlignmentState,
     waypoints: List<HuntingWaypoint>,
     isCrosshairActive: Boolean,
+    corridors: List<WildlifeCorridor> = emptyList(),
+    thermalVectors: List<ThermalWindVector> = emptyList(),
+    scentPlumes: List<ScentPlumeCone> = emptyList(),
+    topographicGrid: Array<Array<TerrainCell>>? = null,
+    showCorridors: Boolean = true,
+    showThermals: Boolean = true,
+    showFeatureHeatmap: Boolean = false,
     onMapPan: (Float, Float) -> Unit,
     onNudgeOverlay: (Float, Float) -> Unit,
     onRotateOverlay: (Float) -> Unit,
@@ -199,6 +207,99 @@ fun MapCanvasOverlay(
                         topLeft = Offset(curtainX - 80.dp.toPx(), 40.dp.toPx()),
                         style = TextStyle(color = HunterAmber, fontSize = 12.sp)
                     )
+                }
+            }
+
+            // --- Machine Learning Overlays ---
+            val pixelsPerMeter = 1.2f * (mapState.zoomLevel / 15f)
+
+            // 2b. Draw Wildlife Corridors
+            if (showCorridors && corridors.isNotEmpty()) {
+                corridors.forEach { corridor ->
+                    if (corridor.pathPoints.size > 1) {
+                        val path = Path()
+                        val dataset = alignmentState.lazDataset
+                        val centerLat = dataset?.defaultLat ?: mapState.centerLat
+                        val centerLng = dataset?.defaultLng ?: mapState.centerLng
+
+                        corridor.pathPoints.forEachIndexed { index, pt ->
+                            val px = center.x + (pt.first * pixelsPerMeter)
+                            val py = center.y - (pt.second * pixelsPerMeter)
+                            if (index == 0) path.moveTo(px, py) else path.lineTo(px, py)
+                        }
+
+                        drawPath(
+                            path = path,
+                            color = HunterAmber,
+                            style = Stroke(
+                                width = 3.5.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 10f), 0f)
+                            )
+                        )
+
+                        // Corridor label
+                        val startPt = corridor.pathPoints.first()
+                        drawText(
+                            textMeasurer = textMeasurer,
+                            text = "🐾 ${corridor.name}",
+                            topLeft = Offset(center.x + (startPt.first * pixelsPerMeter), center.y - (startPt.second * pixelsPerMeter)),
+                            style = TextStyle(color = HunterAmber, fontSize = 10.sp, background = Color.Black.copy(0.7f))
+                        )
+                    }
+                }
+            }
+
+            // 2c. Draw Thermal Wind Vectors
+            if (showThermals && thermalVectors.isNotEmpty()) {
+                thermalVectors.forEach { vec ->
+                    val vx = center.x + (vec.localX * pixelsPerMeter)
+                    val vy = center.y - (vec.localY * pixelsPerMeter)
+                    val arrowLen = (vec.speedMps * 8f).coerceIn(12f, 30f)
+                    val rad = Math.toRadians(vec.windAngleDegrees.toDouble())
+
+                    val endX = vx + (arrowLen * cos(rad)).toFloat()
+                    val endY = vy + (arrowLen * sin(rad)).toFloat()
+
+                    val color = if (vec.isDowndraft) TopoCyan.copy(alpha = 0.6f) else HunterAmber.copy(alpha = 0.6f)
+                    drawLine(color = color, start = Offset(vx, vy), end = Offset(endX, endY), strokeWidth = 2f)
+                    drawCircle(color = color, radius = 2f, center = Offset(endX, endY))
+                }
+            }
+
+            // 2d. Draw Scent Plumes
+            if (showThermals && scentPlumes.isNotEmpty()) {
+                scentPlumes.forEach { plume ->
+                    val px = center.x + (plume.originX * pixelsPerMeter)
+                    val py = center.y - (plume.originY * pixelsPerMeter)
+                    val reachPx = plume.reachMeters * pixelsPerMeter
+
+                    drawArc(
+                        color = Color.Red.copy(alpha = 0.22f),
+                        startAngle = plume.windDirectionDegrees - (plume.coneAngleDegrees / 2f),
+                        sweepAngle = plume.coneAngleDegrees,
+                        useCenter = true,
+                        topLeft = Offset(px - reachPx, py - reachPx),
+                        size = Size(reachPx * 2, reachPx * 2)
+                    )
+                }
+            }
+
+            // 2e. Draw Topographic Feature Badges
+            if (showFeatureHeatmap && topographicGrid != null) {
+                val grid = topographicGrid!!
+                for (y in grid.indices step 4) {
+                    for (x in grid[0].indices step 4) {
+                        val cell = grid[y][x]
+                        if (cell.featureType == TerrainFeatureType.SADDLE || cell.featureType == TerrainFeatureType.BENCH) {
+                            val cx = center.x + (cell.worldX * pixelsPerMeter)
+                            val cy = center.y - (cell.worldY * pixelsPerMeter)
+                            drawCircle(
+                                color = Color(cell.featureType.colorHex).copy(alpha = 0.8f),
+                                radius = 6.dp.toPx(),
+                                center = Offset(cx, cy)
+                            )
+                        }
+                    }
                 }
             }
 

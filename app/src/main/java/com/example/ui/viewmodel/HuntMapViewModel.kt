@@ -11,6 +11,8 @@ import com.example.data.model.SavedOverlay
 import com.example.data.model.WaypointType
 import com.example.data.repository.HuntMapRepository
 import com.example.data.service.AiTerrainService
+import com.example.ml.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -81,6 +83,31 @@ class HuntMapViewModel(application: Application) : AndroidViewModel(application)
     private val _aiAnalysisResult = MutableStateFlow<String?>(null)
     val aiAnalysisResult: StateFlow<String?> = _aiAnalysisResult.asStateFlow()
 
+    // Machine Learning Heavy Overlay States
+    private val _showCorridors = MutableStateFlow(true)
+    val showCorridors: StateFlow<Boolean> = _showCorridors.asStateFlow()
+
+    private val _showThermals = MutableStateFlow(true)
+    val showThermals: StateFlow<Boolean> = _showThermals.asStateFlow()
+
+    private val _showFeatureHeatmap = MutableStateFlow(false)
+    val showFeatureHeatmap: StateFlow<Boolean> = _showFeatureHeatmap.asStateFlow()
+
+    private val _timeOfDay = MutableStateFlow(ThermalScentSimulator.TimeOfDay.DAWN_MORNING)
+    val timeOfDay: StateFlow<ThermalScentSimulator.TimeOfDay> = _timeOfDay.asStateFlow()
+
+    private val _topographicGrid = MutableStateFlow<Array<Array<TerrainCell>>?>(null)
+    val topographicGrid: StateFlow<Array<Array<TerrainCell>>?> = _topographicGrid.asStateFlow()
+
+    private val _corridors = MutableStateFlow<List<WildlifeCorridor>>(emptyList())
+    val corridors: StateFlow<List<WildlifeCorridor>> = _corridors.asStateFlow()
+
+    private val _thermalVectors = MutableStateFlow<List<ThermalWindVector>>(emptyList())
+    val thermalVectors: StateFlow<List<ThermalWindVector>> = _thermalVectors.asStateFlow()
+
+    private val _scentPlumes = MutableStateFlow<List<ScentPlumeCone>>(emptyList())
+    val scentPlumes: StateFlow<List<ScentPlumeCone>> = _scentPlumes.asStateFlow()
+
     private val aiTerrainService = AiTerrainService()
 
     init {
@@ -117,6 +144,47 @@ class HuntMapViewModel(application: Application) : AndroidViewModel(application)
             centerLat = dataset.defaultLat,
             centerLng = dataset.defaultLng
         )
+        recalculateMlOverlays(dataset)
+    }
+
+    fun toggleCorridors() {
+        _showCorridors.value = !_showCorridors.value
+    }
+
+    fun toggleThermals() {
+        _showThermals.value = !_showThermals.value
+    }
+
+    fun toggleFeatureHeatmap() {
+        _showFeatureHeatmap.value = !_showFeatureHeatmap.value
+    }
+
+    fun setTimeOfDay(time: ThermalScentSimulator.TimeOfDay) {
+        _timeOfDay.value = time
+        _alignmentState.value.lazDataset?.let { recalculateMlOverlays(it) }
+    }
+
+    fun recalculateMlOverlays(dataset: LazDataset) {
+        viewModelScope.launch(Dispatchers.Default) {
+            val grid = TerrainFeatureExtractor.processDataset(dataset)
+            _topographicGrid.value = grid
+
+            val generatedCorridors = CorridorPathfinder.generateWildlifeCorridors(grid)
+            _corridors.value = generatedCorridors
+
+            val vectors = ThermalScentSimulator.calculateWindVectors(grid, _timeOfDay.value)
+            _thermalVectors.value = vectors
+
+            val plumes = waypoints.value.map { wp ->
+                ThermalScentSimulator.generateScentPlume(
+                    standX = ((wp.lng - dataset.defaultLng) * 111320.0).toFloat(),
+                    standY = ((wp.lat - dataset.defaultLat) * 111320.0).toFloat(),
+                    windDirectionDegrees = vectors.firstOrNull()?.windAngleDegrees ?: 270f,
+                    windSpeedMps = 2.5f
+                )
+            }
+            _scentPlumes.value = plumes
+        }
     }
 
     fun setMapType(type: MapType) {
