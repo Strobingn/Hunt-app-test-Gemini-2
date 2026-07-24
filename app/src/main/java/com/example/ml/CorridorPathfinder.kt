@@ -88,15 +88,24 @@ object CorridorPathfinder {
     ): List<TerrainCell> {
         val openSet = PriorityQueue<Node>()
         val closedSet = HashSet<Pair<Int, Int>>()
+        val bestG = HashMap<Pair<Int, Int>, Float>()
 
         val startNode = Node(startX, startY, 0f, heuristic(startX, startY, targetX, targetY))
         openSet.add(startNode)
+        bestG[Pair(startX, startY)] = 0f
 
         val dx = intArrayOf(-1, 0, 1, -1, 1, -1, 0, 1)
         val dy = intArrayOf(-1, -1, -1, 0, 0, 1, 1, 1)
 
-        while (openSet.isNotEmpty()) {
+        var iterations = 0
+        val maxIterations = 2000
+
+        while (openSet.isNotEmpty() && iterations < maxIterations) {
+            iterations++
             val current = openSet.poll() ?: break
+
+            val currentPos = Pair(current.x, current.y)
+            if (closedSet.contains(currentPos)) continue
 
             if (current.x == targetX && current.y == targetY) {
                 // Reconstruct path
@@ -109,14 +118,15 @@ object CorridorPathfinder {
                 return path.reversed()
             }
 
-            closedSet.add(Pair(current.x, current.y))
+            closedSet.add(currentPos)
 
             for (i in 0 until 8) {
                 val nx = current.x + dx[i]
                 val ny = current.y + dy[i]
 
                 if (nx !in grid[0].indices || ny !in grid.indices) continue
-                if (closedSet.contains(Pair(nx, ny))) continue
+                val neighborPos = Pair(nx, ny)
+                if (closedSet.contains(neighborPos)) continue
 
                 val cell = grid[ny][nx]
                 // Movement cost = distance + slope friction penalty
@@ -125,10 +135,13 @@ object CorridorPathfinder {
                 val featureBonus = if (cell.featureType == TerrainFeatureType.SADDLE || cell.featureType == TerrainFeatureType.BENCH) -0.5f else 0f
 
                 val newG = current.gCost + stepDist + slopePenalty + featureBonus
-                val h = heuristic(nx, ny, targetX, targetY)
-
-                val neighborNode = Node(nx, ny, newG, h, current)
-                openSet.add(neighborNode)
+                val prevBest = bestG[neighborPos]
+                if (prevBest == null || newG < prevBest) {
+                    bestG[neighborPos] = newG
+                    val h = heuristic(nx, ny, targetX, targetY)
+                    val neighborNode = Node(nx, ny, newG, h, current)
+                    openSet.add(neighborNode)
+                }
             }
         }
 
