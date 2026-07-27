@@ -1,12 +1,14 @@
 package com.example.data.service
 
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
-import androidx.compose.runtime.State
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import com.example.ui.viewmodel.MapType
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.InputStream
@@ -26,13 +28,13 @@ object MapTileProvider {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    // 64MB LRU Bitmap Cache
+    // 64MB LRU ImageBitmap Cache
     private val maxMemory = (Runtime.getRuntime().maxMemory() / 1024).toInt()
     private val cacheSize = (maxMemory / 8).coerceIn(16 * 1024, 64 * 1024)
 
-    private val tileCache = object : LruCache<String, Bitmap>(cacheSize) {
-        override fun sizeOf(key: String, bitmap: Bitmap): Int {
-            return (bitmap.byteCount / 1024).coerceAtLeast(1)
+    private val tileCache = object : LruCache<String, ImageBitmap>(cacheSize) {
+        override fun sizeOf(key: String, bitmap: ImageBitmap): Int {
+            return (bitmap.width * bitmap.height * 4 / 1024).coerceAtLeast(1)
         }
     }
 
@@ -41,25 +43,25 @@ object MapTileProvider {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val _tileVersion = mutableStateOf(0)
-    val tileVersion: State<Int> get() = _tileVersion
+    private val _tileVersion = MutableStateFlow(0)
+    val tileVersion: StateFlow<Int> = _tileVersion.asStateFlow()
 
     private var notifyJob: Job? = null
 
     private fun triggerRecomposition() {
         if (notifyJob?.isActive == true) return
-        notifyJob = scope.launch(Dispatchers.Main) {
+        notifyJob = scope.launch(Dispatchers.Default) {
             delay(100) // Debounce 100ms to batch tile updates cleanly
             _tileVersion.value = _tileVersion.value + 1
         }
     }
 
-    fun getTile(zoom: Int, tileX: Int, tileY: Int, mapType: MapType): Bitmap? {
+    fun getTile(zoom: Int, tileX: Int, tileY: Int, mapType: MapType): ImageBitmap? {
         val cacheKey = "${mapType.name}_${zoom}_${tileX}_${tileY}"
 
         synchronized(tileCache) {
             val cached = tileCache.get(cacheKey)
-            if (cached != null && !cached.isRecycled) return cached
+            if (cached != null) return cached
         }
 
         if (pendingRequests[cacheKey] == true || failedTiles[cacheKey] == true) {
@@ -87,8 +89,9 @@ object MapTileProvider {
                         if (stream != null) {
                             val bitmap = BitmapFactory.decodeStream(stream)
                             if (bitmap != null) {
+                                val imageBmp = bitmap.asImageBitmap()
                                 synchronized(tileCache) {
-                                    tileCache.put(cacheKey, bitmap)
+                                    tileCache.put(cacheKey, imageBmp)
                                 }
                                 triggerRecomposition()
                             } else {

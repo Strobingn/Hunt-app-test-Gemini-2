@@ -28,6 +28,7 @@ fun MainMapScreen(
     val alignmentState by viewModel.alignmentState.collectAsStateWithLifecycle()
     val savedOverlays by viewModel.savedOverlays.collectAsStateWithLifecycle()
     val waypoints by viewModel.waypoints.collectAsStateWithLifecycle()
+    val sampleDatasets by viewModel.sampleDatasets.collectAsStateWithLifecycle()
     val isCrosshairActive by viewModel.isCrosshairPickerActive.collectAsStateWithLifecycle()
     val oracleBackendUrl by viewModel.oracleBackendUrl.collectAsStateWithLifecycle()
     val isAnalyzingAi by viewModel.isAnalyzingAi.collectAsStateWithLifecycle()
@@ -201,7 +202,7 @@ fun MainMapScreen(
     // Dialogs
     if (showDatasetPickerDialog) {
         DatasetAndPresetPickerDialog(
-            sampleDatasets = viewModel.sampleDatasets,
+            sampleDatasets = sampleDatasets,
             savedOverlays = savedOverlays,
             activeDatasetId = alignmentState.lazDataset?.id,
             onSelectDataset = { dataset -> viewModel.selectDataset(dataset) },

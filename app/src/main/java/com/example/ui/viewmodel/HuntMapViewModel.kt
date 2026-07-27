@@ -60,7 +60,8 @@ class HuntMapViewModel(application: Application) : AndroidViewModel(application)
     val savedOverlays: StateFlow<List<SavedOverlay>>
     val waypoints: StateFlow<List<HuntingWaypoint>>
 
-    val sampleDatasets: List<LazDataset>
+    private val _sampleDatasets = MutableStateFlow<List<LazDataset>>(emptyList())
+    val sampleDatasets: StateFlow<List<LazDataset>> = _sampleDatasets.asStateFlow()
 
     private val _mapState = MutableStateFlow(MapState())
     val mapState: StateFlow<MapState> = _mapState.asStateFlow()
@@ -122,9 +123,12 @@ class HuntMapViewModel(application: Application) : AndroidViewModel(application)
             viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
         )
 
-        sampleDatasets = repository.getSampleDatasets()
-        if (sampleDatasets.isNotEmpty()) {
-            selectDataset(sampleDatasets.first())
+        viewModelScope.launch(Dispatchers.Default) {
+            val samples = repository.getSampleDatasets()
+            _sampleDatasets.value = samples
+            if (samples.isNotEmpty()) {
+                selectDataset(samples.first())
+            }
         }
     }
 
@@ -309,8 +313,9 @@ class HuntMapViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun loadSavedOverlay(overlay: SavedOverlay) {
-        val matchingDataset = sampleDatasets.find { it.id == overlay.lazDatasetId }
-            ?: sampleDatasets.firstOrNull() ?: return
+        val currentSamples = _sampleDatasets.value
+        val matchingDataset = currentSamples.find { it.id == overlay.lazDatasetId }
+            ?: currentSamples.firstOrNull() ?: return
 
         val colorRamp = try {
             ColorRamp.valueOf(overlay.colorRampName)

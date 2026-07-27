@@ -20,11 +20,12 @@ object ThermalScentSimulator {
      * Calculates thermal wind vectors across all cells in the grid.
      */
     fun calculateWindVectors(
-        grid: Array<Array<TerrainCell>>,
+        grid: Array<Array<TerrainCell>>?,
         timeOfDay: TimeOfDay,
         ambientWindSpeedMps: Float = 2.5f,
         ambientWindDirectionDegrees: Float = 270f // West wind default
     ): List<ThermalWindVector> {
+        if (grid.isNullOrEmpty() || grid[0].isEmpty()) return emptyList()
         val vectors = mutableListOf<ThermalWindVector>()
 
         for (y in grid.indices step 3) {

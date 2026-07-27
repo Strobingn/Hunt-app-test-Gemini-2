@@ -20,23 +20,27 @@ object CorridorPathfinder {
         override fun compareTo(other: Node): Int = fCost.compareTo(other.fCost)
     }
 
-    fun generateWildlifeCorridors(grid: Array<Array<TerrainCell>>): List<WildlifeCorridor> {
+    fun generateWildlifeCorridors(grid: Array<Array<TerrainCell>>?): List<WildlifeCorridor> {
+        if (grid.isNullOrEmpty() || grid[0].isEmpty()) return emptyList()
+
         val height = grid.size
         val width = grid[0].size
 
+        if (height < 2 || width < 2) return emptyList()
+
         // Find start node (typically a creek bottom or feeding flat near bottom-left)
         val startNode = findBestCell(grid) { cell -> cell.featureType == TerrainFeatureType.CREEK_BOTTOM || cell.featureType == TerrainFeatureType.BEDDING_FLAT }
-            ?: Pair(2, 2)
+            ?: Pair(0, 0)
 
         // Find target node (top ridge or saddle near top-right)
         val endNode = findBestCell(grid) { cell -> cell.featureType == TerrainFeatureType.SADDLE || cell.featureType == TerrainFeatureType.RIDGE_CREST }
-            ?: Pair(width - 3, height - 3)
+            ?: Pair(width - 1, height - 1)
 
         val path1 = computeAStarPath(grid, startNode.first, startNode.second, endNode.first, endNode.second)
 
         // Alternate corridor through secondary saddle
-        val altStart = Pair(width - 4, 3)
-        val altEnd = Pair(3, height - 4)
+        val altStart = Pair((width - 1).coerceAtLeast(0), 0)
+        val altEnd = Pair(0, (height - 1).coerceAtLeast(0))
         val path2 = computeAStarPath(grid, altStart.first, altStart.second, altEnd.first, altEnd.second)
 
         val corridors = mutableListOf<WildlifeCorridor>()
@@ -69,9 +73,11 @@ object CorridorPathfinder {
     }
 
     private fun findBestCell(grid: Array<Array<TerrainCell>>, predicate: (TerrainCell) -> Boolean): Pair<Int, Int>? {
+        if (grid.isEmpty() || grid[0].isEmpty()) return null
         for (y in grid.indices) {
-            for (x in grid[0].indices) {
-                if (predicate(grid[y][x])) {
+            val row = grid[y]
+            for (x in row.indices) {
+                if (predicate(row[x])) {
                     return Pair(x, y)
                 }
             }
@@ -81,11 +87,18 @@ object CorridorPathfinder {
 
     private fun computeAStarPath(
         grid: Array<Array<TerrainCell>>,
-        startX: Int,
-        startY: Int,
-        targetX: Int,
-        targetY: Int
+        startXInput: Int,
+        startYInput: Int,
+        targetXInput: Int,
+        targetYInput: Int
     ): List<TerrainCell> {
+        val height = grid.size
+        val width = grid[0].size
+
+        val startX = startXInput.coerceIn(0, width - 1)
+        val startY = startYInput.coerceIn(0, height - 1)
+        val targetX = targetXInput.coerceIn(0, width - 1)
+        val targetY = targetYInput.coerceIn(0, height - 1)
         val openSet = PriorityQueue<Node>()
         val closedSet = HashSet<Pair<Int, Int>>()
         val bestG = HashMap<Pair<Int, Int>, Float>()

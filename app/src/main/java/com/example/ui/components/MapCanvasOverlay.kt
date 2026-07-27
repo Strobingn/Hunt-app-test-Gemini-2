@@ -17,11 +17,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.ColorRamp
@@ -62,7 +65,54 @@ fun MapCanvasOverlay(
     var totalPanY by remember { mutableStateOf(0f) }
 
     // Read tileVersion at composable level to cleanly recompose when new tiles arrive
-    val currentTileVersion = MapTileProvider.tileVersion.value
+    val currentTileVersion by MapTileProvider.tileVersion.collectAsState()
+
+    val dataset = alignmentState.lazDataset
+    val cachedPointCloudBitmap: ImageBitmap? = remember(
+        dataset?.id,
+        alignmentState.colorRamp,
+        alignmentState.minElevationFilter,
+        alignmentState.maxElevationFilter,
+        alignmentState.opacity
+    ) {
+        if (dataset == null || dataset.points.isEmpty()) null
+        else {
+            try {
+                val bmpWidth = 450
+                val bmpHeight = 450
+                val bitmap = android.graphics.Bitmap.createBitmap(bmpWidth, bmpHeight, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bitmap)
+                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+                val minZBound = dataset.minZ + (dataset.elevationRange * alignmentState.minElevationFilter)
+                val maxZBound = dataset.minZ + (dataset.elevationRange * alignmentState.maxElevationFilter)
+
+                for (pt in dataset.points) {
+                    if (pt.z < minZBound || pt.z > maxZBound) continue
+
+                    val normX = ((pt.x - dataset.minX) / dataset.width).coerceIn(0f, 1f)
+                    val normY = ((dataset.maxY - pt.y) / dataset.height).coerceIn(0f, 1f)
+
+                    val px = normX * bmpWidth
+                    val py = normY * bmpHeight
+
+                    val color = getPointColor(
+                        pt = pt,
+                        minZ = dataset.minZ,
+                        maxZ = dataset.maxZ,
+                        colorRamp = alignmentState.colorRamp,
+                        opacity = alignmentState.opacity
+                    )
+                    paint.color = color.toArgb()
+
+                    canvas.drawCircle(px, py, 3.5f, paint)
+                }
+                bitmap.asImageBitmap()
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
 
     Box(
         modifier = modifier
@@ -103,8 +153,7 @@ fun MapCanvasOverlay(
             )
 
             // 2. Draw LAZ Point Cloud Overlay Layer
-            val dataset = alignmentState.lazDataset
-            if (dataset != null) {
+            if (dataset != null && cachedPointCloudBitmap != null) {
                 val scaleFactor = alignmentState.scaleX * (mapState.zoomLevel / 12f)
                 val rotAngle = alignmentState.rotationDegrees
 
@@ -118,82 +167,63 @@ fun MapCanvasOverlay(
                     center.y - (latDiff * pixelsPerMeter).toFloat()
                 )
 
-                rotate(degrees = rotAngle, pivot = lazCenterPx) {
-                    val datasetWidthPx = dataset.width * pixelsPerMeter * scaleFactor
-                    val datasetHeightPx = dataset.height * pixelsPerMeter * scaleFactor
+                val datasetWidthPx = dataset.width * pixelsPerMeter * scaleFactor
+                val datasetHeightPx = dataset.height * pixelsPerMeter * scaleFactor
 
-                    val left = lazCenterPx.x - datasetWidthPx / 2f
-                    val top = lazCenterPx.y - datasetHeightPx / 2f
+                val left = lazCenterPx.x - datasetWidthPx / 2f
+                val top = lazCenterPx.y - datasetHeightPx / 2f
 
-                    val curtainWidth = canvasWidth * alignmentState.splitCurtainRatio
+                val curtainWidth = canvasWidth * alignmentState.splitCurtainRatio
 
-                    // Filter elevation Z bounds
-                    val minZBound = dataset.minZ + (dataset.elevationRange * alignmentState.minElevationFilter)
-                    val maxZBound = dataset.minZ + (dataset.elevationRange * alignmentState.maxElevationFilter)
-
-                    // Draw points
-                    for (pt in dataset.points) {
-                        if (pt.z < minZBound || pt.z > maxZBound) continue
-
-                        val ptX = left + ((pt.x - dataset.minX) / dataset.width) * datasetWidthPx
-                        val ptY = top + ((dataset.maxY - pt.y) / dataset.height) * datasetHeightPx
-
-                        // Apply split curtain crop
-                        if (ptX > curtainWidth) continue
-
-                        val color = getPointColor(
-                            pt = pt,
-                            minZ = dataset.minZ,
-                            maxZ = dataset.maxZ,
-                            colorRamp = alignmentState.colorRamp,
-                            opacity = alignmentState.opacity
+                clipRect(right = curtainWidth) {
+                    rotate(degrees = rotAngle, pivot = lazCenterPx) {
+                        drawImage(
+                            image = cachedPointCloudBitmap,
+                            dstOffset = IntOffset(left.toInt(), top.toInt()),
+                            dstSize = IntSize(
+                                datasetWidthPx.toInt().coerceAtLeast(1),
+                                datasetHeightPx.toInt().coerceAtLeast(1)
+                            )
                         )
 
-                        val pointRadius = (2.2f * scaleFactor).coerceIn(1.5f, 8f)
+                        // Draw LAZ Bounding Box & Anchor Center Handle
+                        drawRoundRect(
+                            color = if (alignmentState.isLocked) ForestSageLight.copy(alpha = 0.5f) else HunterAmber,
+                            topLeft = Offset(left, top),
+                            size = Size(datasetWidthPx, datasetHeightPx),
+                            cornerRadius = CornerRadius(4f, 4f),
+                            style = Stroke(
+                                width = 2.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                            )
+                        )
+
+                        // Center Crosshair for LAZ
                         drawCircle(
-                            color = color,
-                            radius = pointRadius,
-                            center = Offset(ptX, ptY)
+                            color = if (alignmentState.isLocked) ForestSagePrimary else HunterAmber,
+                            radius = 8.dp.toPx(),
+                            center = lazCenterPx,
+                            style = Stroke(width = 2.dp.toPx())
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 3.dp.toPx(),
+                            center = lazCenterPx
+                        )
+
+                        // Draw Anchor Label
+                        val labelText = "${dataset.name} (${dataset.pointCount} pts)\nRot: ${rotAngle.roundToInt()}° | Scale: ${"%.2f".format(alignmentState.scaleX)}x"
+                        drawText(
+                            textMeasurer = textMeasurer,
+                            text = labelText,
+                            topLeft = Offset(left, top - 32.dp.toPx()),
+                            style = TextStyle(
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                background = Color.Black.copy(alpha = 0.7f)
+                            )
                         )
                     }
-
-                    // Draw LAZ Bounding Box & Anchor Center Handle
-                    drawRoundRect(
-                        color = if (alignmentState.isLocked) ForestSageLight.copy(alpha = 0.5f) else HunterAmber,
-                        topLeft = Offset(left, top),
-                        size = Size(datasetWidthPx, datasetHeightPx),
-                        cornerRadius = CornerRadius(4f, 4f),
-                        style = Stroke(
-                            width = 2.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
-                        )
-                    )
-
-                    // Center Crosshair for LAZ
-                    drawCircle(
-                        color = if (alignmentState.isLocked) ForestSagePrimary else HunterAmber,
-                        radius = 8.dp.toPx(),
-                        center = lazCenterPx,
-                        style = Stroke(width = 2.dp.toPx())
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = 3.dp.toPx(),
-                        center = lazCenterPx
-                    )
-
-                    // Draw Anchor Label
-                    val labelText = "${dataset.name} (${dataset.pointCount} pts)\nRot: ${rotAngle.roundToInt()}° | Scale: ${"%.2f".format(alignmentState.scaleX)}x"
-                    drawText(
-                        textMeasurer = textMeasurer,
-                        text = labelText,
-                        topLeft = Offset(left, top - 32.dp.toPx()),
-                        style = TextStyle(
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            background = Color.Black.copy(alpha = 0.7f)
-                        )
-                    )
                 }
 
                 // Draw Split Curtain Line if curtain ratio < 1.0
@@ -222,33 +252,40 @@ fun MapCanvasOverlay(
                 corridors.forEach { corridor ->
                     if (corridor.pathPoints.size > 1) {
                         val path = Path()
-                        val dataset = alignmentState.lazDataset
-                        val centerLat = dataset?.defaultLat ?: mapState.centerLat
-                        val centerLng = dataset?.defaultLng ?: mapState.centerLng
+                        var validPoints = 0
 
-                        corridor.pathPoints.forEachIndexed { index, pt ->
+                        corridor.pathPoints.forEach { pt ->
                             val px = center.x + (pt.first * pixelsPerMeter)
                             val py = center.y - (pt.second * pixelsPerMeter)
-                            if (index == 0) path.moveTo(px, py) else path.lineTo(px, py)
+                            if (px.isFinite() && py.isFinite()) {
+                                if (validPoints == 0) path.moveTo(px, py) else path.lineTo(px, py)
+                                validPoints++
+                            }
                         }
 
-                        drawPath(
-                            path = path,
-                            color = HunterAmber,
-                            style = Stroke(
-                                width = 3.5.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 10f), 0f)
+                        if (validPoints > 1) {
+                            drawPath(
+                                path = path,
+                                color = HunterAmber,
+                                style = Stroke(
+                                    width = 3.5.dp.toPx(),
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 10f), 0f)
+                                )
                             )
-                        )
 
-                        // Corridor label
-                        val startPt = corridor.pathPoints.first()
-                        drawText(
-                            textMeasurer = textMeasurer,
-                            text = "🐾 ${corridor.name}",
-                            topLeft = Offset(center.x + (startPt.first * pixelsPerMeter), center.y - (startPt.second * pixelsPerMeter)),
-                            style = TextStyle(color = HunterAmber, fontSize = 10.sp, background = Color.Black.copy(0.7f))
-                        )
+                            // Corridor label
+                            val startPt = corridor.pathPoints.first()
+                            val lx = center.x + (startPt.first * pixelsPerMeter)
+                            val ly = center.y - (startPt.second * pixelsPerMeter)
+                            if (lx.isFinite() && ly.isFinite()) {
+                                drawText(
+                                    textMeasurer = textMeasurer,
+                                    text = "🐾 ${corridor.name}",
+                                    topLeft = Offset(lx, ly),
+                                    style = TextStyle(color = HunterAmber, fontSize = 10.sp, background = Color.Black.copy(0.7f))
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -264,9 +301,11 @@ fun MapCanvasOverlay(
                     val endX = vx + (arrowLen * cos(rad)).toFloat()
                     val endY = vy + (arrowLen * sin(rad)).toFloat()
 
-                    val color = if (vec.isDowndraft) TopoCyan.copy(alpha = 0.6f) else HunterAmber.copy(alpha = 0.6f)
-                    drawLine(color = color, start = Offset(vx, vy), end = Offset(endX, endY), strokeWidth = 2f)
-                    drawCircle(color = color, radius = 2f, center = Offset(endX, endY))
+                    if (vx.isFinite() && vy.isFinite() && endX.isFinite() && endY.isFinite()) {
+                        val color = if (vec.isDowndraft) TopoCyan.copy(alpha = 0.6f) else HunterAmber.copy(alpha = 0.6f)
+                        drawLine(color = color, start = Offset(vx, vy), end = Offset(endX, endY), strokeWidth = 2f)
+                        drawCircle(color = color, radius = 2f, center = Offset(endX, endY))
+                    }
                 }
             }
 
@@ -277,7 +316,7 @@ fun MapCanvasOverlay(
                     val py = center.y - (plume.originY * pixelsPerMeter)
                     val reachPx = plume.reachMeters * pixelsPerMeter
 
-                    if (reachPx > 0f && !reachPx.isNaN()) {
+                    if (px.isFinite() && py.isFinite() && reachPx.isFinite() && reachPx > 0f) {
                         drawArc(
                             color = Color.Red.copy(alpha = 0.22f),
                             startAngle = plume.windDirectionDegrees - (plume.coneAngleDegrees / 2f),
@@ -423,10 +462,10 @@ private fun DrawScope.drawMapBaseLayer(
             val tileScreenX = center.x + ((tx - centerTileX) * tileSizePx).toFloat()
             val tileScreenY = center.y + ((ty - centerTileY) * tileSizePx).toFloat()
 
-            if (tileBitmap != null && !tileBitmap.isRecycled) {
+            if (tileBitmap != null) {
                 try {
                     drawImage(
-                        image = tileBitmap.asImageBitmap(),
+                        image = tileBitmap,
                         topLeft = Offset(tileScreenX, tileScreenY)
                     )
                     tilesDrawn++
